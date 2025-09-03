@@ -1,0 +1,52 @@
+// prisma/schema.prisma
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAW
+  GAME_PURCHASE   // compra de raspadinha
+  GAME_PAYOUT     // prêmio de jogo
+  BONUS           // bônus de boas-vindas, etc.
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+model User {
+  id            Int       @id @default(autoincrement())
+  nome          String
+  email         String    @unique
+  senha         String
+  createdAt     DateTime  @default(now())
+
+  // Saldo em CENTAVOS (R$ 20,00 = 2000)
+  balanceCents  Int       @default(2000)
+
+  transactions  Transaction[]
+}
+
+model Transaction {
+  id              Int               @id @default(autoincrement())
+  userId          Int
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type            TransactionType
+  status          TransactionStatus @default(COMPLETED)
+  amountCents     Int               // positivo para crédito, negativo para débito
+  description     String?
+  pixTransactionId String?          @unique
+  createdAt       DateTime          @default(now())
+
+  @@index([userId, createdAt])
+}
