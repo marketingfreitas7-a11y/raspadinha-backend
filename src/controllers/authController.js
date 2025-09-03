@@ -1,41 +1,43 @@
 // src/controllers/authController.js
-const {
-  PrismaClient,
-  TransactionType,
-  TransactionStatus,
-} = require("@prisma/client");
+const { PrismaClient, TransactionType, TransactionStatus } = require("@prisma/client");
 const prisma = new PrismaClient();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev_fallback_secret";
 
-// Cadastro
+// Cadastro - CORRIGIDO para aceitar todos os campos
 async function register(req, res) {
   try {
-    const { nome, email, senha } = req.body;
+    const { nome, email, telefone, cpf, senha } = req.body;
 
-    if (!nome || !email || !senha) {
+    if (!nome || !email || !telefone || !cpf || !senha) {
       return res.status(400).json({ error: "Preencha todos os campos." });
     }
 
-    // já existe?
-    const existente = await prisma.user.findUnique({ where: { email } });
+    // Verificar se já existe
+    const existente = await prisma.user.findFirst({ 
+      where: { 
+        OR: [
+          { email },
+          { telefone },
+          { cpf }
+        ]
+      } 
+    });
+    
     if (existente) {
-      return res.status(409).json({ error: "Email já cadastrado." });
+      return res.status(409).json({ error: "Email, telefone ou CPF já cadastrado." });
     }
 
     const senhaHash = await bcrypt.hash(senha, 10);
 
-    // Tudo atômico: cria o usuário e registra a transação de bônus
     const novoUsuario = await prisma.$transaction(async (tx) => {
-      // balanceCents já nasce = 2000 pelo default do schema
       const user = await tx.user.create({
-        data: { nome, email, senha: senhaHash },
-        select: { id: true, nome: true, email: true, createdAt: true, balanceCents: true },
+        data: { nome, email, telefone, cpf, senha: senhaHash },
+        select: { id: true, nome: true, email: true, balanceCents: true },
       });
 
-      // registra o bônus de boas-vindas no histórico (R$ 20,00)
       await tx.transaction.create({
         data: {
           userId: user.id,
@@ -49,42 +51,43 @@ async function register(req, res) {
       return user;
     });
 
-    return res.status(201).json({ message: "Usuário cadastrado!", user: novoUsuario });
+    const token = jwt.sign({ id: novoUsuario.id, email }, JWT_SECRET, { expiresIn: "24h" });
+
+    return res.status(201).json({ 
+      message: "Usuário cadastrado!", 
+      token,
+      user: novoUsuario 
+    });
   } catch (err) {
-    if (err.code === "P2002") {
-      return res.status(409).json({ error: "Email já cadastrado." });
-    }
     console.error(err);
     return res.status(500).json({ error: "Erro no servidor." });
   }
 }
 
-// Login
+// Login - CORRIGIDO para usar telefone
 async function login(req, res) {
   try {
-    const { email, senha } = req.body;
-    if (!email || !senha) {
-      return res.status(400).json({ error: "Informe email e senha." });
+    const { telefone, senha } = req.body;
+    if (!telefone || !senha) {
+      return res.status(400).json({ error: "Informe telefone e senha." });
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await prisma.user.findUnique({ where: { telefone } });
     if (!user) {
-      return res.status(401).json({ error: "Credenciais inválidas." });
+      return res.status(401).json({ error: "Telefone ou senha incorretos." });
     }
 
     const ok = await bcrypt.compare(senha, user.senha);
     if (!ok) {
-      return res.status(401).json({ error: "Credenciais inválidas." });
+      return res.status(401).json({ error: "Telefone ou senha incorretos." });
     }
 
-    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, {
-      expiresIn: "1h",
-    });
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: "24h" });
 
     return res.json({
       message: "Login realizado com sucesso!",
       token,
-      user: { id: user.id, nome: user.nome, email: user.email },
+      user: { id: user.id, nome: user.nome, email: user.email, saldo: user.balanceCents / 100 },
     });
   } catch (err) {
     console.error(err);
@@ -92,7 +95,7 @@ async function login(req, res) {
   }
 }
 
-// Perfil (lê o usuário a partir do token)
+// Resto do código igual...
 async function me(req, res) {
   try {
     const auth = req.headers.authorization || "";
